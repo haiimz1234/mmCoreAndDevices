@@ -18,7 +18,7 @@
 #define ERR_NO_PORT_SET 108
 #define ERR_VERSION_MISMATCH 109
 
- 
+ /*****************************
  
 class PrizmatixHub : public HubBase<PrizmatixHub>  
 {
@@ -47,7 +47,10 @@ public:
    void SetTimedOutput(bool active) {timedOutputActive_ = active;}
 
    int PurgeComPortH() {return PurgeComPort(port_.c_str());}
-   int WriteToComPortH(const unsigned char* command, unsigned len) {return WriteToComPort(port_.c_str(), command, len);}
+   int WriteToComPortH(const unsigned char* command, unsigned len)
+   {
+	   return WriteToComPort(port_.c_str(), command, len);
+   }
    int ReadFromComPortH(unsigned char* answer, unsigned maxLen, unsigned long& bytesRead)
    {
       return ReadFromComPort(port_.c_str(), answer, maxLen, bytesRead);
@@ -71,10 +74,12 @@ public:
    unsigned GetShutterState() {return shutterState_;}
    unsigned GetSwitchState() {return switchState_;}
    int GetNmLeds() {return nmLeds;}
+   int GetVersionAns() { return version_; }
 private:
 	int nmLeds;
 	
    int GetControllerVersion(int&);
+   int GetControllerVersionPulser(int& version, std::string answer);
    std::string port_;
    bool initialized_;
    bool portAvailable_;
@@ -86,7 +91,7 @@ private:
    unsigned shutterState_;
 };
 //CGenericBase
- 
+ *******************************/
 //PrizmatixLED   CSignalIOBase
 class PrizmatixLED : public CGenericBase<PrizmatixLED>  
 {
@@ -98,9 +103,41 @@ public:
    // ------------
    int Initialize();
    int Shutdown();
-  
+   std::string port_;
+   bool portAvailable_;
+   bool IsPortAvailable() { return portAvailable_; };
+ 
    void GetName(char* pszName) const;
-   
+   int PurgeComPortH() { return PurgeComPort(port_.c_str()); }
+   int WriteToComPortH(const unsigned char* command, unsigned len) { return WriteToComPort(port_.c_str(), command, len); }
+   int ReadFromComPortH(unsigned char* answer, unsigned maxLen, unsigned long& bytesRead)
+   {
+	   return ReadFromComPort(port_.c_str(), answer, maxLen, bytesRead);
+   }
+   int  SendSerialCommandH(char* b)
+   {
+	   if (initialized_ == false) return 0;
+	   return SendSerialCommand(port_.c_str(), b, "\n");
+   }
+   int  GetSerialAnswerH(std::string& answer,char LookFor)
+   {	
+	   int  ret;
+	   int nmLoop = 0;
+	   do {
+		    ret = GetSerialAnswer(port_.c_str(), "\r\n", answer);
+		   if (ret != DEVICE_OK || nmLoop > 5)
+			   return ret;
+		   nmLoop++;
+	   } while (LookFor!= 0 && answer[0] != LookFor);
+	   return ret;
+
+   }
+   static MMThreadLock lock_;
+   static MMThreadLock& GetLock() { return lock_; };
+
+   int OnPort(MM::PropertyBase* pProp, MM::ActionType pAct);
+   bool IsTimedOutputActive() { return timedOutputActive_; }
+   void SetTimedOutput(bool active) { timedOutputActive_ = active; }
 
    // DA API
       virtual bool Busy()
@@ -123,18 +160,105 @@ public:
    int OnSTBL(MM::PropertyBase* pProp, MM::ActionType eAct);
 
 private:
-	PrizmatixHub* myHub;
+ 
    int WriteToPort(char * Str);
    long  ValLeds[10];
    long  OnOffLeds[10];
-   bool initialized_;
+   bool initialized_, timedOutputActive_;
+   int GetControllerVersion();
+  
    int nmLeds;
    std::string name_;
 };
 
+class PrizmatixPulserReadThread;
+//PrizmatixPulser   
+class PrizmatixPulser : public CGenericBase<PrizmatixPulser>
+{
+public:
+	PrizmatixPulser(int nmLeds, char* Name);
+	~PrizmatixPulser();
+	long IsWorking;
+	bool IsTimedOutputActive() { return timedOutputActive_; }
+	void SetTimedOutput(bool active) { timedOutputActive_ = active; }
+	int CheckArrive(char N);
+	bool portAvailable_, timedOutputActive_;
+	// MMDevice API
+	// ------------
+	int Initialize();
+	int Shutdown();
+	 
+	bool IsPortAvailable() { return portAvailable_; };
+	PrizmatixPulserReadThread* mThread_;
+	void GetName(char* pszName) const;
+	int PurgeComPortH() { return PurgeComPort(port_.c_str()); }
+	int WriteToComPortH(const unsigned char* command, unsigned len) { return WriteToComPort(port_.c_str(), command, len); }
+	int ReadFromComPortH(unsigned char* answer, unsigned maxLen, unsigned long& bytesRead)
+	{
+		return ReadFromComPort(port_.c_str(), answer, maxLen, bytesRead);
+	}
+	int  SendSerialCommandH(char* b)
+	{
+		if (initialized_ == false) return 0;
+		return SendSerialCommand(port_.c_str(), b, "\n");
+	}
+	int  GetSerialAnswerH(std::string& answer)
+	{
 
+		return  GetSerialAnswer(port_.c_str(), "\r\n", answer);
 
+	}
+	static MMThreadLock lock_;
+	static MMThreadLock& GetLock() { return lock_; }
 
+	// DA API
+	virtual bool Busy()
+	{
+		return false;
+	}
  
+// action interface
+// ----------------
+	int OnPort(MM::PropertyBase* pProp, MM::ActionType eAct);
+//	int OnPowerLEDEx(MM::PropertyBase* pProp, MM::ActionType eAct, long Param);
+	int OnOfOnEx(MM::PropertyBase* pProp, MM::ActionType eAct);// , long Param);
+	
+	int OnTextChange(MM::PropertyBase* pProp, MM::ActionType eAct);
+	
+private:
+	std::string port_;
+	std::string CommandSend;
+	int WriteToPort(char* Str);
+	long  ValLeds[10];
+	long  OnOffLeds[10];
+	bool initialized_;
+	int nmLeds;
+	std::string name_;
+};
+
+
+
+class PrizmatixPulserReadThread : public MMDeviceThreadBase
+{
+public:
+	PrizmatixPulserReadThread(PrizmatixPulser& aInput);
+	~PrizmatixPulserReadThread();
+	int svc();
+	int open(void*) { return 0; }
+	int close(unsigned long) { return 0; }
+
+	void Start();
+	void Stop() { stop_ = true; }
+	PrizmatixPulserReadThread& operator=(const PrizmatixPulserReadThread&)
+	{
+		return *this;
+	}
+
+
+private:
+	long state_;
+	PrizmatixPulser& Pulser_;
+	bool stop_;
+};
  
 #endif
